@@ -90,28 +90,28 @@ servo servos[N_SERVO];
 
 struct leg_config_t
 {
-    double A;
-    double B;
-    double D; // negative on left
-    double alpha_offet;
-    double beta_offet;
-    double gamma_offet;
-    double alpha_hlim;
-    double alpha_llim;
-    double beta_hlim;
-    double beta_llim;
-    double gamma_hlim;
-    double gamma_llim;
+    float A;
+    float B;
+    float D; // negative on left
+    float alpha_offset;
+    float beta_offset;
+    float gamma_offset;
+    float alpha_hlim;
+    float alpha_llim;
+    float beta_hlim;
+    float beta_llim;
+    float gamma_hlim;
+    float gamma_llim;
 };
 
 constexpr auto N_LEG = 4;
 
 leg_config_t leg_configs[4] = 
 {
-/** Q1 **/    {150, 100, 100, 90, 90},
-/** Q2 **/    {150, 100,-100, 90, 90},
-/** Q3 **/    {150, 100,-100, 90, 90},
-/** Q4 **/    {150, 100, 100, 90, 90}
+/** Q1 **/    {150, 100,  100, 90, 90,  30, 180, 45, 135, 45, 90, -30},
+/** Q2 **/    {150, 100, -100, 90, 90,  30, 180, 45, 135, 45, 90, -30},
+/** Q3 **/    {150, 100, -100, 90, 90, -30, 180, 45, 135, 45, 30, -90},
+/** Q4 **/    {150, 100,  100, 90, 90, -30, 180, 45, 135, 45, 30, -90}
 };
 
 float sqr(float x)
@@ -133,7 +133,11 @@ class leg
 {
 public:
     leg() = default;
-    leg(unsigned quadrant, float A, float B, float D, float alpha_offset, float beta_offset, float gamma_offset)
+    leg(unsigned quadrant, float A, float B, float D,
+        float alpha_offset, float beta_offset, float gamma_offset,
+        float alpha_hlim, float alpha_llim,
+        float beta_hlim, float beta_llim,
+        float gamma_hlim, float gamma_llim)
         : quadrant(quadrant)
         , A(A)
         , AA(A*A)
@@ -144,6 +148,12 @@ public:
         , alpha_offset(alpha_offset)
         , beta_offset(beta_offset)
         , gamma_offset(gamma_offset)
+        , alpha_hlim(alpha_hlim)
+        , alpha_llim(alpha_llim)
+        , beta_hlim(beta_hlim)
+        , beta_llim(beta_llim)
+        , gamma_hlim(gamma_hlim)
+        , gamma_llim(gamma_llim)
     {}
 
     void assign_servo(unsigned pos, servo* s)
@@ -183,12 +193,23 @@ public:
         
         log(Serial, "leg[Q%d] | a_deg=%f", quadrant, a_deg);
 
+        
         float a_adj = a_deg - alpha_offset;
         float b_adj = b_deg - beta_offset;
         float g_adj = g_deg;
         // float b_adj = b_deg - gamma_offset;
-
+        
         log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f) -> g=%.3f b=%.3f a=%.3f", quadrant, x,y,z, g_adj, b_adj, a_adj);
+
+        bool a_oor = a_deg > alpha_hlim || a_deg < alpha_llim;
+        bool b_oor = b_deg > beta_hlim  || b_deg < beta_llim;
+        bool g_oor = g_deg > gamma_hlim || g_deg < gamma_llim;
+
+        if (a_oor || b_oor || g_oor)
+        {
+            log(Serial, "leg[Q%d] | OOR(%d,%d,%d)", quadrant, a_oor, b_oor, g_oor);
+            return;
+        }
 
         root->set_angle(g_adj);
         mid ->set_angle(b_adj);
@@ -207,7 +228,13 @@ private:
     float alpha_offset;
     float beta_offset;
     float gamma_offset;
-
+    float alpha_hlim;
+    float alpha_llim;
+    float beta_hlim;
+    float beta_llim;
+    float gamma_hlim;
+    float gamma_llim;
+    
     servo* root = nullptr;
     servo* mid  = nullptr;
     servo* claw = nullptr;
@@ -255,7 +282,7 @@ void setup()
     for (auto i=0u; i<N_LEG; i++)
     {
         auto& c = leg_configs[i];
-        legs[i] = leg(i+1, c.A, c.B, c.D, c.alpha_offet, c.beta_offet, c.gamma_offet);
+        legs[i] = leg(i+1, c.A, c.B, c.D, c.alpha_offset, c.beta_offset, c.gamma_offset, c.alpha_hlim, c.alpha_llim, c.beta_hlim, c.beta_llim, c.gamma_hlim, c.gamma_llim);
     }
 
     for (auto i=0u; i<N_SERVO; i++)

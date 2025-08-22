@@ -1,6 +1,5 @@
 import sys
 import serial
-import time
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QGroupBox, 
                              QVBoxLayout, QHBoxLayout, QGridLayout, QSlider, 
                              QLabel, QPushButton, QComboBox, QTextEdit, 
@@ -44,10 +43,10 @@ class DraggablePlot(QWidget):
         
         # Draw labels
         painter.setFont(QFont('Arial', 8))
-        painter.drawText(5, center_y - 5, "X-")
-        painter.drawText(center_x + 5, 15, "Y+")
-        painter.drawText(w - 20, center_y - 5, "X+")
-        painter.drawText(center_x + 5, h - 5, "Y-")
+        painter.drawText(5, center_y - 5, "Y+")
+        painter.drawText(center_x + 5, 15, "X+")
+        painter.drawText(w - 20, center_y - 5, "Y-")
+        painter.drawText(center_x + 5, h - 5, "X-")
         
     def mousePressEvent(self, event):
         center_x, center_y = self.width() // 2, self.height() // 2
@@ -182,10 +181,6 @@ class MainWindow(QMainWindow):
             LegControl("Rear Right", 4)
         ]
         
-        # Command rate limiting
-        self.last_command_time = 0
-        self.pending_commands = {}
-        
         # Connect each leg's positionChanged signal
         for leg in self.legs:
             leg.positionChanged.connect(self.handle_position_change)
@@ -218,11 +213,6 @@ class MainWindow(QMainWindow):
         self.serial_toggle = QPushButton("Open Serial")
         self.serial_toggle.clicked.connect(self.toggle_serial)
         self.serial_connection = None
-        
-        # Command rate limiter timer
-        self.command_timer = QTimer()
-        self.command_timer.timeout.connect(self.process_pending_commands)
-        self.command_timer.setInterval(100)  # Check every 100ms
         
         # Serial response timer
         self.response_timer = QTimer()
@@ -260,12 +250,9 @@ class MainWindow(QMainWindow):
         # Status bar
         self.status_bar = self.statusBar()
         self.status_bar.showMessage("Ready")
-        
-        # Start the command timer
-        self.command_timer.start()
     
     def handle_position_change(self):
-        """Handle position changes with rate limiting"""
+        """Handle position changes without rate limiting"""
         if not self.send_on_update.isChecked():
             return
             
@@ -277,33 +264,10 @@ class MainWindow(QMainWindow):
         # Get the current command
         command = changed_leg.get_command()
         
-        # Update pending commands with the latest value
-        self.pending_commands[changed_leg.quadrant] = command
-    
-    def process_pending_commands(self):
-        """Process pending commands with 500ms rate limiting"""
-        current_time = time.time()
-        
-        # Check if enough time has passed since last command
-        if current_time - self.last_command_time < 0.5:  # 500ms
-            return
-            
-        if not self.pending_commands:
-            return
-            
-        if not self.serial_connection or not self.serial_connection.is_open:
-            # Clear pending commands if serial not open
-            self.pending_commands.clear()
-            return
-            
-        # Send all pending commands
-        for quadrant, command in self.pending_commands.items():
+        # Send immediately if serial is open
+        if self.serial_connection and self.serial_connection.is_open:
             self.send_command(command)
-            self.log_message(f"Sent (rate limited): {command}", "out")
-        
-        # Clear pending commands and update last command time
-        self.pending_commands.clear()
-        self.last_command_time = current_time
+            self.log_message(f"Sent: {command}", "out")
     
     def log_message(self, message, direction="in"):
         """Add message to serial log with timestamp and direction"""
@@ -355,15 +319,10 @@ class MainWindow(QMainWindow):
             self.log_message("Error: Serial port not open", "error")
             return
             
-        # Clear any pending commands
-        self.pending_commands.clear()
-        
         for leg in self.legs:
             command = leg.get_command()
             self.send_command(command)
             self.log_message(f"Sent: {command}", "out")
-        
-        self.last_command_time = time.time()
     
     def toggle_serial(self):
         """Open or close the serial connection"""
@@ -429,7 +388,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Clean up when window is closed"""
         self.close_serial()
-        self.command_timer.stop()
         event.accept()
 
 if __name__ == "__main__":

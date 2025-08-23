@@ -1,4 +1,6 @@
 #include <cmath>
+#include <vector>
+#include <tuple>
 
 #include <Arduino.h>
 #include <Wire.h>
@@ -90,6 +92,9 @@ servo servos[N_SERVO];
 
 struct leg_config_t
 {
+    float origin_x;
+    float origin_y;
+    float origin_z;
     float A;
     float B;
     float D; // negative on left
@@ -106,12 +111,12 @@ struct leg_config_t
 
 constexpr auto N_LEG = 4;
 
-leg_config_t leg_configs[4] = 
+leg_config_t leg_configs[4] =
 {
-/** Q1 **/    {150, 100,  100, 90, 90,  30, 180, 45, 135, 45, 90, -30},
-/** Q2 **/    {150, 100, -100, 90, 90,  30, 180, 45, 135, 45, 90, -30},
-/** Q3 **/    {150, 100, -100, 90, 90, -30, 180, 45, 135, 45, 30, -90},
-/** Q4 **/    {150, 100,  100, 90, 90, -30, 180, 45, 135, 45, 30, -90}
+/** Q1 **/    { 200,    0, -125, 150, 100,  100, 90, 90,  30, 180, 45, 180, 45, 90, -30},
+/** Q2 **/    {-200,    0, -125, 150, 100, -100, 90, 90,  30, 180, 45, 180, 45, 90, -30},
+/** Q3 **/    {-150, -150, -125, 150, 100, -100, 90, 90, -30, 180, 45, 180, 45, 30, -90},
+/** Q4 **/    { 150, -150, -125, 150, 100,  100, 90, 90, -30, 180, 45, 180, 45, 30, -90}
 };
 
 float sqr(float x)
@@ -133,12 +138,17 @@ class leg
 {
 public:
     leg() = default;
-    leg(unsigned quadrant, float A, float B, float D,
+    leg(unsigned quadrant,
+        float origin_x, float origin_y, float origin_z,
+        float A, float B, float D,
         float alpha_offset, float beta_offset, float gamma_offset,
         float alpha_hlim, float alpha_llim,
         float beta_hlim, float beta_llim,
         float gamma_hlim, float gamma_llim)
         : quadrant(quadrant)
+        , origin_x(origin_x)
+        , origin_y(origin_y)
+        , origin_z(origin_z)
         , A(A)
         , AA(A*A)
         , B(B)
@@ -167,6 +177,16 @@ public:
     {
         log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f)", quadrant, x,y,z);
 
+        cx = x;
+        cy = y;
+        cz = z;
+
+        x += origin_x;
+        y += origin_y;
+        z += origin_z;
+
+        log(Serial, "leg[Q%d] | R(%.3f,%.3f,%.3f)", quadrant, x,y,z);
+
         float g = std::atan(y/std::fabs(x));
         float R = std::sqrt(x*x+y*y);
 
@@ -190,16 +210,16 @@ public:
         float a_deg = deg(a);
         float b_deg = deg(b1+b2);
         float g_deg = deg(g);
-        
+
         log(Serial, "leg[Q%d] | a_deg=%f", quadrant, a_deg);
 
-        
+
         float a_adj = a_deg - alpha_offset;
         float b_adj = b_deg - beta_offset;
         float g_adj = g_deg;
         // float b_adj = b_deg - gamma_offset;
-        
-        log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f) -> g=%.3f b=%.3f a=%.3f", quadrant, x,y,z, g_adj, b_adj, a_adj);
+
+        log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f) -> a=%.3f b=%.3f g=%.3f", quadrant, x,y,z, a_adj, b_adj, g_adj);
 
         bool a_oor = a_deg > alpha_hlim || a_deg < alpha_llim;
         bool b_oor = b_deg > beta_hlim  || b_deg < beta_llim;
@@ -211,14 +231,28 @@ public:
             return;
         }
 
+        if (std::isnan(a_deg) || std::isnan(b_deg) || std::isnan(g_deg))
+        {
+            log(Serial, "leg[Q%d] | OOR NAN", quadrant);
+            return;
+        }
+
         root->set_angle(g_adj);
         mid ->set_angle(b_adj);
         claw->set_angle(a_adj);
     }
 
+    std::tuple<float,float,float> get_xyz()
+    {
+        return std::make_tuple(cx,cy,cz);
+    }
+
 private:
     unsigned quadrant;
 
+    float origin_x;
+    float origin_y;
+    float origin_z;
     float A;
     float AA;
     float B;
@@ -234,13 +268,40 @@ private:
     float beta_llim;
     float gamma_hlim;
     float gamma_llim;
-    
+
+    float cx;
+    float cy;
+    float cz;
+
     servo* root = nullptr;
     servo* mid  = nullptr;
     servo* claw = nullptr;
 };
 
 leg legs[N_LEG];
+
+class motion_planner
+{
+public:
+    void add_leg(leg* l)
+    {
+        legs.emplace_back(l);
+    }
+
+    void save_pose(unsigned pose_group, unsigned pose_index)
+    {
+
+    }
+
+private:
+    std::vector<leg*> legs;
+
+    struct pose_group_s
+    {
+        unsigned current_index;
+        std::vector<std::tuple<float,float,float>> poses;
+    };
+};
 
 void reset_position()
 {
@@ -282,7 +343,7 @@ void setup()
     for (auto i=0u; i<N_LEG; i++)
     {
         auto& c = leg_configs[i];
-        legs[i] = leg(i+1, c.A, c.B, c.D, c.alpha_offset, c.beta_offset, c.gamma_offset, c.alpha_hlim, c.alpha_llim, c.beta_hlim, c.beta_llim, c.gamma_hlim, c.gamma_llim);
+        legs[i] = leg(i+1,c.origin_x, c.origin_y, c.origin_z, c.A, c.B, c.D, c.alpha_offset, c.beta_offset, c.gamma_offset, c.alpha_hlim, c.alpha_llim, c.beta_hlim, c.beta_llim, c.gamma_hlim, c.gamma_llim);
     }
 
     for (auto i=0u; i<N_SERVO; i++)

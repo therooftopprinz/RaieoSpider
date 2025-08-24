@@ -31,6 +31,15 @@ Adafruit_PWMServoDriver pwm(PCA9685_ADDRESS);
 BluetoothSerial SerialBT;
 const char* btDeviceName = "RaieoSpider";
 
+template<typename... T>
+void log(const char* msg, T... t)
+{
+    char m[1024];
+    snprintf(m, sizeof(m), msg, t...);
+    Serial.println(m);
+    SerialBT.println(m);
+}
+
 struct servo_config_t
 {
     unsigned quadrant;
@@ -74,7 +83,7 @@ public:
 
     void set_angle(float a)
     {
-        set_raw(1500 + a*div);
+        set_raw(mid + a*div);
     }
 
     void set_raw(unsigned raw)
@@ -113,10 +122,11 @@ constexpr auto N_LEG = 4;
 
 leg_config_t leg_configs[4] =
 {
-/** Q1 **/    { 200,    0, -125, 150, 100,  100, 90, 90,  30, 180, 45, 180, 45, 90, -30},
-/** Q2 **/    {-200,    0, -125, 150, 100, -100, 90, 90,  30, 180, 45, 180, 45, 90, -30},
-/** Q3 **/    {-150, -150, -125, 150, 100, -100, 90, 90, -30, 180, 45, 180, 45, 30, -90},
-/** Q4 **/    { 150, -150, -125, 150, 100,  100, 90, 90, -30, 180, 45, 180, 45, 30, -90}
+//                x     y    z     A    B    D    a   b    g   ah  al   bh  bl  gh   gl
+/** Q1 **/    { 150,  150, -125, 150, 100,  100, 90, 90,  45, 180, 30, 180, 45, 90, -45},
+/** Q2 **/    {-150,  150, -125, 150, 100, -100, 90, 90,  45, 180, 30, 180, 45, 90, -45},
+/** Q3 **/    {-150, -150, -125, 150, 100, -100, 90, 90, -45, 180, 30, 180, 45, 45, -90},
+/** Q4 **/    { 150, -150, -125, 150, 100,  100, 90, 90, -45, 180, 30, 180, 45, 45, -90}
 };
 
 float sqr(float x)
@@ -175,7 +185,7 @@ public:
 
     void position(float x, float y, float z)
     {
-        log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f)", quadrant, x,y,z);
+        log(Serial, "LEG_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
 
         cx = x;
         cy = y;
@@ -185,12 +195,12 @@ public:
         y += origin_y;
         z += origin_z;
 
-        log(Serial, "leg[Q%d] | R(%.3f,%.3f,%.3f)", quadrant, x,y,z);
+        // log(Serial, "leg[Q%d] | R(%.3f,%.3f,%.3f)", quadrant, x,y,z);
 
         float g = std::atan(y/std::fabs(x));
         float R = std::sqrt(x*x+y*y);
 
-        log(Serial, "leg[Q%d] | g_deg=%f R=%f", quadrant, deg(g), R);
+        // log(Serial, "leg[Q%d] | g_deg=%f R=%f", quadrant, deg(g), R);
 
         float  X = sgn(D)*R;
         float& Y = z;
@@ -199,27 +209,25 @@ public:
         float C  = std::sqrt(CC);
         float BC = B*C;
 
-        log(Serial, "leg[Q%d] | A=%f AA=%f B=%f BB=%f AB=%f C=%f CC=%f BC=%f D=%f", quadrant, A, AA, B, BB, AB, C, CC, BC, D);
+        // log(Serial, "leg[Q%d] | A=%f AA=%f B=%f BB=%f AB=%f C=%f CC=%f BC=%f D=%f", quadrant, A, AA, B, BB, AB, C, CC, BC, D);
 
         float b1 = std::acos((BB+CC-AA)/(2*BC));
         float b2 = -sgn(Y) * std::asin((-sgn(-D)*X + sgn(-D)*D)/C) + (Y>=0 ? PI : 0);
-        log(Serial, "leg[Q%d] | b1_deg=%f", quadrant, deg(b1));
-        log(Serial, "leg[Q%d] | b2_deg=%f", quadrant, deg(b2));
+        // log(Serial, "leg[Q%d] | b1_deg=%f", quadrant, deg(b1));
+        // log(Serial, "leg[Q%d] | b2_deg=%f", quadrant, deg(b2));
 
         float a = std::acos((AA+BB-CC)/(2*AB));
         float a_deg = deg(a);
         float b_deg = deg(b1+b2);
         float g_deg = deg(g);
 
-        log(Serial, "leg[Q%d] | a_deg=%f", quadrant, a_deg);
-
+        // log(Serial, "leg[Q%d] | a_deg=%f", quadrant, a_deg);
 
         float a_adj = a_deg - alpha_offset;
         float b_adj = b_deg - beta_offset;
-        float g_adj = g_deg;
-        // float b_adj = b_deg - gamma_offset;
+        float g_adj = g_deg - gamma_offset;
 
-        log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f) -> a=%.3f b=%.3f g=%.3f", quadrant, x,y,z, a_adj, b_adj, g_adj);
+        // log(Serial, "leg[Q%d] | (%.3f,%.3f,%.3f) -> a=%.3f b=%.3f g=%.3f", quadrant, x,y,z, a_adj, b_adj, g_adj);
 
         bool a_oor = a_deg > alpha_hlim || a_deg < alpha_llim;
         bool b_oor = b_deg > beta_hlim  || b_deg < beta_llim;
@@ -280,7 +288,7 @@ private:
 
 leg legs[N_LEG];
 
-class motion_planner
+class pose_storage
 {
 public:
     void add_leg(leg* l)
@@ -288,20 +296,131 @@ public:
         legs.emplace_back(l);
     }
 
-    void save_pose(unsigned pose_group, unsigned pose_index)
+    void save(unsigned pose_id, unsigned pose_index)
     {
+        if (pose_id >= poses.size())
+        {
+            poses.resize(pose_id + 1);
+        }
 
+        auto& pose = poses[pose_id];
+        
+        if (pose_index >= pose.size())
+        {
+            pose.resize(pose_index + 1);
+        }
+
+        auto& poselegs = pose[pose_index];
+        poselegs.clear();
+
+        for (auto& leg : legs)
+        {
+            poselegs.emplace_back(leg->get_xyz());
+        }
+    }
+
+    void save(unsigned pose_id, unsigned pose_index, unsigned leg_index, float x, float y, float z)
+    {
+        if (pose_id >= poses.size())
+        {
+            poses.resize(pose_id + 1);
+        }
+
+        auto& pose = poses.at(pose_id);
+
+        if (pose_index >= pose.size())
+        {
+            pose.resize(pose_index + 1);
+        }
+
+        auto& poselegs = pose.at(pose_index);
+
+        if (leg_index >= poselegs.size())
+        {
+            poselegs.resize(leg_index + 1);
+        }
+
+        poselegs.at(leg_index) = std::make_tuple(x, y, z);
+    }
+
+    void load(unsigned pose_id, unsigned pose_index, bool inc_idx = false)
+    {
+        current_pose_id  = pose_id;
+        current_pose_idx = pose_index;
+
+        if (inc_idx)
+        {
+            current_pose_idx++;
+        }
+
+        if (pose_id >= poses.size())
+        {
+            current_pose_id = 0;
+            log(Serial, "poses[%d][%d] | Invalid pose_id", pose_id, pose_index);
+            return;
+        }
+        
+        auto& pose = poses.at(pose_id);
+        
+        if (pose_index >= pose.size())
+        {
+            current_pose_idx = 0;
+            log(Serial, "poses[%d][%d] | Invalid pose_index", pose_id, pose_index);
+            return;
+        }
+
+        auto& poselegs = pose.at(pose_index);
+
+        unsigned i = 0;
+        for (auto& leg : legs)
+        {
+            // auto [x,y,z] = poselegs[i++];
+            auto& pl = poselegs[i++];
+            auto x = std::get<0>(pl);
+            auto y = std::get<1>(pl);
+            auto z = std::get<2>(pl);
+            leg->position(x,y,z);
+        }
+    }
+
+    void tick()
+    {
+        log(Serial, "poses.tick() | id=%d idx=%d", current_pose_id, current_pose_idx);
+        load(current_pose_id, current_pose_idx, true);
+    }
+
+    void dump()
+    {
+        unsigned i = 0;
+        for (auto& pose : poses)
+        {
+            unsigned j = 0;
+            for (auto& plegs : pose)
+            {
+                unsigned k = 0;
+                for (auto& leg : plegs)
+                {
+                    auto x = std::get<0>(leg);
+                    auto y = std::get<1>(leg);
+                    auto z = std::get<2>(leg);
+                    log("POSE %u %u %u %4.0f %4.0f %4.0f", i, j, k, x, y, z);
+                    k++;
+                }
+                j++;
+            }
+            i++;
+        }
     }
 
 private:
     std::vector<leg*> legs;
-
-    struct pose_group_s
-    {
-        unsigned current_index;
-        std::vector<std::tuple<float,float,float>> poses;
-    };
+    using legs_pose_t = std::vector<std::tuple<float,float,float>>;
+    std::vector<std::vector<legs_pose_t>> poses;
+    unsigned current_pose_id = 0;
+    unsigned current_pose_idx = 0;
 };
+
+pose_storage poses;
 
 void reset_position()
 {
@@ -344,6 +463,7 @@ void setup()
     {
         auto& c = leg_configs[i];
         legs[i] = leg(i+1,c.origin_x, c.origin_y, c.origin_z, c.A, c.B, c.D, c.alpha_offset, c.beta_offset, c.gamma_offset, c.alpha_hlim, c.alpha_llim, c.beta_hlim, c.beta_llim, c.gamma_hlim, c.gamma_llim);
+        poses.add_leg(&legs[i]);
     }
 
     for (auto i=0u; i<N_SERVO; i++)
@@ -373,29 +493,61 @@ void readInput(S& serial)
             servos[channel].set_angle(angle);
             log(serial, "servos[%d].angle=%f", channel, angle);
         }
-
-        if ('R' == cmd)
+        else if ('R' == cmd)
         {
             unsigned channel = serial.parseInt();
             unsigned raw     = serial.parseInt();
             servos[channel].set_raw(raw);
             log(serial, "servos[%d].raw=%d", channel, raw);
         }
-
-        if ('L' == cmd)
+        else  if ('L' == cmd)
         {
             unsigned quadrant = serial.parseInt();
             float x = serial.parseFloat();
             float y = serial.parseFloat();
             float z = serial.parseFloat();
             legs[quadrant-1].position(x,y,z);
-            log(serial, "leg[Q%d].position=(%f,%f,%f)", quadrant, x,y,z);
+            log(serial, "leg[Q%d].position=(%.1f,%.1f,%.1f)", quadrant, x,y,z);
         }
-
-        if ('X' == cmd)
+        else if ('X' == cmd)
         {
             reset_position();
             log(serial, "servos.reset_position()");
+        }
+        else if ('S' == cmd)
+        {
+            unsigned pose_id  = serial.parseInt();
+            unsigned pose_idx = serial.parseInt();
+            log(serial, "poses[%d][%d].save()", pose_id, pose_idx);
+            poses.save(pose_id, pose_idx);
+        }
+        else if ('E' == cmd)
+        {
+            unsigned pose_id  = serial.parseInt();
+            unsigned pose_idx = serial.parseInt();
+            unsigned pose_leg = serial.parseInt();
+            float x = serial.parseFloat();
+            float y = serial.parseFloat();
+            float z = serial.parseFloat();
+            log(serial, "poses[%d][%d].save(%d, %.1f,%.1f,%.1f)", pose_id, pose_idx, pose_leg, x, y, z);
+            poses.save(pose_id, pose_idx, pose_leg, x, y, z);
+        }
+        else  if ('D' == cmd)
+        {
+            unsigned pose_id  = serial.parseInt();
+            unsigned pose_idx = serial.parseInt();
+            log(serial, "poses[%d][%d].load()", pose_id, pose_idx);
+            poses.load(pose_id, pose_idx);
+        }
+        else  if ('P' == cmd)
+        {
+            log(serial, "poses.dump()");
+            poses.dump();
+        }
+        else  if ('T' == cmd)
+        {
+            log(serial, "poses.tick()");
+            poses.tick();
         }
 
         serial.readStringUntil('\n');

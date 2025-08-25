@@ -281,7 +281,7 @@ class MainWindow(QMainWindow):
 
         # Serial controls
         self.port_combo = QComboBox()
-        self.port_combo.addItems(["COM4", "/dev/ttyUSB1"])
+        self.port_combo.addItems(["COM4", "/dev/rfcomm0", "/dev/ttyUSB0"])
         self.port_combo.setMaximumWidth(100)
 
         self.baud_combo = QComboBox()

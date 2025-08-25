@@ -183,6 +183,16 @@ public:
         else if (2 == pos) claw = s;
     }
 
+    void center(float x, float y, float z)
+    {
+        log(Serial, "CENTER_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
+        off_x = x;
+        off_y = y;
+        off_z = z;
+
+        position(cx, cy, cz);
+    }
+
     void position(float x, float y, float z)
     {
         log(Serial, "LEG_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
@@ -194,6 +204,10 @@ public:
         x += origin_x;
         y += origin_y;
         z += origin_z;
+
+        x += off_x;
+        y += off_y;
+        z += off_z;
 
         // log(Serial, "leg[Q%d] | R(%.3f,%.3f,%.3f)", quadrant, x,y,z);
 
@@ -250,9 +264,9 @@ public:
         claw->set_angle(a_adj);
     }
 
-    std::tuple<float,float,float> get_xyz()
+    std::tuple<float,float,float,float,float,float> get_cxyz()
     {
-        return std::make_tuple(cx,cy,cz);
+        return std::make_tuple(off_x,off_y,off_z,cx,cy,cz);
     }
 
 private:
@@ -280,6 +294,9 @@ private:
     float cx;
     float cy;
     float cz;
+    float off_x = 0;
+    float off_y = 0;
+    float off_z = 0;
 
     servo* root = nullptr;
     servo* mid  = nullptr;
@@ -315,11 +332,11 @@ public:
 
         for (auto& leg : legs)
         {
-            poselegs.emplace_back(leg->get_xyz());
+            poselegs.emplace_back(leg->get_cxyz());
         }
     }
 
-    void save(unsigned pose_id, unsigned pose_index, unsigned leg_index, float x, float y, float z)
+    void save(unsigned pose_id, unsigned pose_index, unsigned leg_index, float ox, float oy, float oz, float x, float y, float z)
     {
         if (pose_id >= poses.size())
         {
@@ -340,7 +357,7 @@ public:
             poselegs.resize(leg_index + 1);
         }
 
-        poselegs.at(leg_index) = std::make_tuple(x, y, z);
+        poselegs.at(leg_index) = std::make_tuple(ox, oy, oz, x, y, z);
     }
 
     void load(unsigned pose_id, unsigned pose_index, bool inc_idx = false)
@@ -376,9 +393,13 @@ public:
         {
             // auto [x,y,z] = poselegs[i++];
             auto& pl = poselegs[i++];
-            auto x = std::get<0>(pl);
-            auto y = std::get<1>(pl);
-            auto z = std::get<2>(pl);
+            auto ox = std::get<0>(pl);
+            auto oy = std::get<1>(pl);
+            auto oz = std::get<2>(pl);
+            auto x  = std::get<3>(pl);
+            auto y  = std::get<4>(pl);
+            auto z  = std::get<5>(pl);
+            leg->center(ox, oy, oz);
             leg->position(x,y,z);
         }
     }
@@ -400,10 +421,13 @@ public:
                 unsigned k = 0;
                 for (auto& leg : plegs)
                 {
-                    auto x = std::get<0>(leg);
-                    auto y = std::get<1>(leg);
-                    auto z = std::get<2>(leg);
-                    log("POSE %u %u %u %4.0f %4.0f %4.0f", i, j, k, x, y, z);
+                    auto ox = std::get<0>(leg);
+                    auto oy = std::get<1>(leg);
+                    auto oz = std::get<2>(leg);
+                    auto x  = std::get<3>(leg);
+                    auto y  = std::get<4>(leg);
+                    auto z  = std::get<5>(leg);
+                    log("POSE %u %u %u %4.0f %4.0f %4.0f %4.0f %4.0f %4.0f", i, j, k, ox, oy, oz, x, y, z);
                     k++;
                 }
                 j++;
@@ -414,7 +438,7 @@ public:
 
 private:
     std::vector<leg*> legs;
-    using legs_pose_t = std::vector<std::tuple<float,float,float>>;
+    using legs_pose_t = std::vector<std::tuple<float,float,float,float,float,float>>;
     std::vector<std::vector<legs_pose_t>> poses;
     unsigned current_pose_id = 0;
     unsigned current_pose_idx = 0;
@@ -472,7 +496,6 @@ void setup()
         legs[c.quadrant-1].assign_servo(c.pos, servos+i);
     }
 
-
     delay(1000);
     reset_position();
 
@@ -500,6 +523,17 @@ void readInput(S& serial)
             servos[channel].set_raw(raw);
             log(serial, "servos[%d].raw=%d", channel, raw);
         }
+        else  if ('C' == cmd)
+        {
+            float x = serial.parseFloat();
+            float y = serial.parseFloat();
+            float z = serial.parseFloat();
+            for (auto i=0u; i<N_LEG; i++)
+            {
+                legs[i].center(x,y,z);
+            }
+            log(serial, "legs.center(%.1f,%.1f,%.1f)", x,y,z);
+        }
         else  if ('L' == cmd)
         {
             unsigned quadrant = serial.parseInt();
@@ -526,11 +560,14 @@ void readInput(S& serial)
             unsigned pose_id  = serial.parseInt();
             unsigned pose_idx = serial.parseInt();
             unsigned pose_leg = serial.parseInt();
-            float x = serial.parseFloat();
-            float y = serial.parseFloat();
-            float z = serial.parseFloat();
-            log(serial, "poses[%d][%d].save(%d, %.1f,%.1f,%.1f)", pose_id, pose_idx, pose_leg, x, y, z);
-            poses.save(pose_id, pose_idx, pose_leg, x, y, z);
+            float ox = serial.parseFloat();
+            float oy = serial.parseFloat();
+            float oz = serial.parseFloat();
+            float  x = serial.parseFloat();
+            float  y = serial.parseFloat();
+            float  z = serial.parseFloat();
+            log(serial, "poses[%d][%d].save(%d, %.1f,%.1f,%.1f, %.1f,%.1f,%.1f)", pose_id, pose_idx, pose_leg, ox, oy, oz, x, y, z);
+            poses.save(pose_id, pose_idx, pose_leg, ox, oy, oz, x, y, z);
         }
         else  if ('D' == cmd)
         {

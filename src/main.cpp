@@ -185,7 +185,7 @@ public:
 
     void center(float x, float y, float z)
     {
-        log(Serial, "CENTER_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
+        log("CENTER_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
         off_x = x;
         off_y = y;
         off_z = z;
@@ -195,7 +195,7 @@ public:
 
     void position(float x, float y, float z)
     {
-        log(Serial, "LEG_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
+        log("LEG_UPDATE %d %4.1f %4.1f %4.1f", quadrant, x,y,z);
 
         cx = x;
         cy = y;
@@ -249,13 +249,13 @@ public:
 
         if (a_oor || b_oor || g_oor)
         {
-            log(Serial, "leg[Q%d] | OOR(%d,%d,%d)", quadrant, a_oor, b_oor, g_oor);
+            log("leg[Q%d] | OOR(%d,%d,%d)", quadrant, a_oor, b_oor, g_oor);
             return;
         }
 
         if (std::isnan(a_deg) || std::isnan(b_deg) || std::isnan(g_deg))
         {
-            log(Serial, "leg[Q%d] | OOR NAN", quadrant);
+            log("leg[Q%d] | OOR NAN", quadrant);
             return;
         }
 
@@ -313,6 +313,11 @@ public:
         legs.emplace_back(l);
     }
 
+    void save_current()
+    {
+        save(current_pose_id, current_pose_idx);
+    }
+
     void save(unsigned pose_id, unsigned pose_index)
     {
         if (pose_id >= poses.size())
@@ -338,6 +343,8 @@ public:
 
     void save(unsigned pose_id, unsigned pose_index, unsigned leg_index, float ox, float oy, float oz, float x, float y, float z)
     {
+        log("POSE %u %u %u %4.0f %4.0f %4.0f %4.0f %4.0f %4.0f", pose_id, pose_index, leg_index, ox, oy, oz, x, y, z);
+
         if (pose_id >= poses.size())
         {
             poses.resize(pose_id + 1);
@@ -373,7 +380,7 @@ public:
         if (pose_id >= poses.size())
         {
             current_pose_id = 0;
-            log(Serial, "poses[%d][%d] | Invalid pose_id", pose_id, pose_index);
+            log("poses[%d][%d] | Invalid pose_id", pose_id, pose_index);
             return;
         }
         
@@ -382,7 +389,7 @@ public:
         if (pose_index >= pose.size())
         {
             current_pose_idx = 0;
-            log(Serial, "poses[%d][%d] | Invalid pose_index", pose_id, pose_index);
+            log("poses[%d][%d] | Invalid pose_index", pose_id, pose_index);
             return;
         }
 
@@ -406,7 +413,7 @@ public:
 
     void tick()
     {
-        log(Serial, "poses.tick() | id=%d idx=%d", current_pose_id, current_pose_idx);
+        log("poses.tick() | id=%d idx=%d", current_pose_id, current_pose_idx);
         load(current_pose_id, current_pose_idx, true);
     }
 
@@ -445,14 +452,6 @@ private:
 };
 
 pose_storage poses;
-
-void reset_position()
-{
-    for (auto i=0; i<N_SERVO; i++)
-    {
-        servos[i].set_angle(0);
-    }
-}
 
 void setup()
 {
@@ -497,9 +496,8 @@ void setup()
     }
 
     delay(1000);
-    reset_position();
 
-    log(Serial, "Ready");
+    log("Ready");
 }
 
 template <typename S>
@@ -514,14 +512,14 @@ void readInput(S& serial)
             unsigned channel = serial.parseInt();
             float    angle   = serial.parseFloat();
             servos[channel].set_angle(angle);
-            log(serial, "servos[%d].angle=%f", channel, angle);
+            log("servos[%d].angle=%f", channel, angle);
         }
         else if ('R' == cmd)
         {
             unsigned channel = serial.parseInt();
             unsigned raw     = serial.parseInt();
             servos[channel].set_raw(raw);
-            log(serial, "servos[%d].raw=%d", channel, raw);
+            log("servos[%d].raw=%d", channel, raw);
         }
         else  if ('C' == cmd)
         {
@@ -532,7 +530,7 @@ void readInput(S& serial)
             {
                 legs[i].center(x,y,z);
             }
-            log(serial, "legs.center(%.1f,%.1f,%.1f)", x,y,z);
+            log("legs.center(%.1f,%.1f,%.1f)", x,y,z);
         }
         else  if ('L' == cmd)
         {
@@ -540,19 +538,51 @@ void readInput(S& serial)
             float x = serial.parseFloat();
             float y = serial.parseFloat();
             float z = serial.parseFloat();
-            legs[quadrant-1].position(x,y,z);
-            log(serial, "leg[Q%d].position=(%.1f,%.1f,%.1f)", quadrant, x,y,z);
+
+            if (quadrant == 0) // all
+            {
+                legs[0].position(x,y,z);
+                legs[1].position(x,y,z);
+                legs[2].position(x,y,z);
+                legs[3].position(x,y,z);
+            }
+            else if (quadrant == 5) // right
+            {
+                legs[1-1].position(x,y,z);
+                legs[4-1].position(x,y,z);
+            }
+            else if (quadrant == 6) // left
+            {
+                legs[2-1].position(x,y,z);
+                legs[3-1].position(x,y,z);
+            }
+            else if (quadrant == 7) // front
+            {
+                legs[1-1].position(x,y,z);
+                legs[2-1].position(x,y,z);
+            }
+            else if (quadrant == 8) // rear
+            {
+                legs[3-1].position(x,y,z);
+                legs[4-1].position(x,y,z);
+            }
+            else if (quadrant <= 4)
+            {
+                legs[quadrant-1].position(x,y,z);
+            }
+
+            log("leg[Q%d].position=(%.1f,%.1f,%.1f)", quadrant, x,y,z);
         }
         else if ('X' == cmd)
         {
-            reset_position();
-            log(serial, "servos.reset_position()");
+            poses.save_current();
+            log("pose.save_current()");
         }
         else if ('S' == cmd)
         {
             unsigned pose_id  = serial.parseInt();
             unsigned pose_idx = serial.parseInt();
-            log(serial, "poses[%d][%d].save()", pose_id, pose_idx);
+            log("poses[%d][%d].save()", pose_id, pose_idx);
             poses.save(pose_id, pose_idx);
         }
         else if ('E' == cmd)
@@ -566,24 +596,24 @@ void readInput(S& serial)
             float  x = serial.parseFloat();
             float  y = serial.parseFloat();
             float  z = serial.parseFloat();
-            log(serial, "poses[%d][%d].save(%d, %.1f,%.1f,%.1f, %.1f,%.1f,%.1f)", pose_id, pose_idx, pose_leg, ox, oy, oz, x, y, z);
+            log("poses[%d][%d].save(%d, %.1f,%.1f,%.1f, %.1f,%.1f,%.1f)", pose_id, pose_idx, pose_leg, ox, oy, oz, x, y, z);
             poses.save(pose_id, pose_idx, pose_leg, ox, oy, oz, x, y, z);
         }
         else  if ('D' == cmd)
         {
             unsigned pose_id  = serial.parseInt();
             unsigned pose_idx = serial.parseInt();
-            log(serial, "poses[%d][%d].load()", pose_id, pose_idx);
+            log("poses[%d][%d].load()", pose_id, pose_idx);
             poses.load(pose_id, pose_idx);
         }
         else  if ('P' == cmd)
         {
-            log(serial, "poses.dump()");
+            log("poses.dump()");
             poses.dump();
         }
         else  if ('T' == cmd)
         {
-            log(serial, "poses.tick()");
+            log("poses.tick()");
             poses.tick();
         }
 
